@@ -17,26 +17,33 @@ void phase4_start_service_processes(void) {
 
 }
 
-int  kernSleep(int seconds) {
+int  kernSleep(USLOSS_Sysargs* arg) {
+	int seconds = (int)(long)arg->arg1;
 	return 0;
 }
 
-int  kernDiskRead(void* diskBuffer, int unit, int track, int first, int sectors, int* status) {
+int  kernDiskRead(USLOSS_Sysargs* arg) {
 	return 0;
 }
 
-int  kernDiskWrite(void* diskBuffer, int unit, int track, int first, int sectors, int* status) {
+int  kernDiskWrite(USLOSS_Sysargs* arg) {
 	return 0;
 }
 
-int  kernDiskSize(int unit, int* sector, int* track, int* disk) {
+int  kernDiskSize(USLOSS_Sysargs* arg) {
 	return 0;
 }
 
-int  kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
+int  kernTermRead(USLOSS_Sysargs* arg) {
+	char* buffer = (char*)arg->arg1;
+	int bufSize = (int)(long)arg->arg2;
+	int unit = (int)(long)arg->arg3;
 	return 0;
 }
 
-int  kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
+int  kernTermWrite(USLOSS_Sysargs* arg) {
+	char* buffer = (char*)arg->arg1;
+	int bufSize = (int)(long)arg->arg2;
+	int unit = (int)(long)arg->arg3;
 	return 0;
 }
