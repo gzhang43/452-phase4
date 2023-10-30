@@ -9,41 +9,56 @@
 #include "phase3_usermode.h"
 #include "phase4_usermode.h"
 
-void phase4_init(void) {
+typedef struct PCB {
+	int pid;
+} PCB;
 
+void sleepHelper(USLOSS_Sysargs* arg);
+
+void phase4_init(void) {
+	systemCallVec[12] = sleepHelper;
 }
 
 void phase4_start_service_processes(void) {
 
 }
 
-int  kernSleep(USLOSS_Sysargs* arg) {
+void sleepHelper(USLOSS_Sysargs* arg) {
 	int seconds = (int)(long)arg->arg1;
+	int ret = kernSleep(seconds);
+	arg->arg4 = (void*)(long)ret;
+	return;
+}
+
+int  kernSleep(int seconds) {
+	int clockCycles = seconds * 10;
+	USLOSS_Console("%d seconds\n", seconds);
+	int i = 0;
+	int status;
+	while (i < clockCycles) {
+		USLOSS_Console("WAITING\n");
+		waitDevice(0, NULL, &status);
+		i++;
+	}
 	return 0;
 }
 
-int  kernDiskRead(USLOSS_Sysargs* arg) {
+int  kernDiskRead(void* diskBuffer, int unit, int track, int first, int sectors, int* status) {
 	return 0;
 }
 
-int  kernDiskWrite(USLOSS_Sysargs* arg) {
+int  kernDiskWrite(void* diskBuffer, int unit, int track, int first, int sectors, int* status) {
 	return 0;
 }
 
-int  kernDiskSize(USLOSS_Sysargs* arg) {
+int  kernDiskSize(int unit, int* sector, int* track, int* disk) {
 	return 0;
 }
 
-int  kernTermRead(USLOSS_Sysargs* arg) {
-	char* buffer = (char*)arg->arg1;
-	int bufSize = (int)(long)arg->arg2;
-	int unit = (int)(long)arg->arg3;
+int  kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
 	return 0;
 }
 
-int  kernTermWrite(USLOSS_Sysargs* arg) {
-	char* buffer = (char*)arg->arg1;
-	int bufSize = (int)(long)arg->arg2;
-	int unit = (int)(long)arg->arg3;
+int  kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
 	return 0;
 }
