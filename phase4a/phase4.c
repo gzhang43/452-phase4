@@ -1,6 +1,8 @@
 //phase4
 
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include <usloss.h>
 #include "phase1.h"
 #include "phase2.h"
@@ -10,7 +12,10 @@
 #include "phase4_usermode.h"
 
 void sleepHelper(USLOSS_Sysargs* arg);
+void termReadHelper(USLOSS_Sysargs* arg);
+void termWriteHelper(USLOSS_Sysargs* arg);
 int sleepDaemon(char* arg);
+int termDaemon(char* arg);
 
 typedef struct PCB {
     int pid;
@@ -24,14 +29,37 @@ struct PCB processTable4[MAXPROC+1];
 struct PCB* wakeupPQ;
 
 int globalTime;
+int term0Mbox;
+int term1Mbox;
+int term2Mbox;
+int term3Mbox;
 
 void phase4_init(void) {
+    systemCallVec[1] = termReadHelper;
+    systemCallVec[2] = termWriteHelper;
     systemCallVec[12] = sleepHelper;
     globalTime = 0;
+
+    int cr_val = 0x2; // recv int enable
+    cr_val |= 0x4;
+
+    USLOSS_DeviceOutput(USLOSS_TERM_DEV, 0, (void*)(long)cr_val);
+    USLOSS_DeviceOutput(USLOSS_TERM_DEV, 1, (void*)(long)cr_val);
+    USLOSS_DeviceOutput(USLOSS_TERM_DEV, 2, (void*)(long)cr_val);
+    USLOSS_DeviceOutput(USLOSS_TERM_DEV, 3, (void*)(long)cr_val);
+
+    term0Mbox = MboxCreate(1, 0);
+    term1Mbox = MboxCreate(1, 0);
+    term2Mbox = MboxCreate(1, 0);
+    term3Mbox = MboxCreate(1, 0);
 }
 
 void phase4_start_service_processes(void) {
     fork1("sleepDaemon", sleepDaemon, NULL, USLOSS_MIN_STACK, 1);
+    fork1("term0Daemon", termDaemon, "0", USLOSS_MIN_STACK, 1);
+    fork1("term1Daemon", termDaemon, "1", USLOSS_MIN_STACK, 1);
+    fork1("term2Daemon", termDaemon, "2", USLOSS_MIN_STACK, 1);
+    fork1("term3Daemon", termDaemon, "3", USLOSS_MIN_STACK, 1);
 }
 
 void addToPQ(struct PCB* process) {
@@ -102,11 +130,39 @@ int kernDiskSize(int unit, int* sector, int* track, int* disk) {
     return 0;
 }
 
+void termReadHelper(USLOSS_Sysargs* arg) {
+    char* buffer = (char*)(long)arg->arg1;
+    int bufferSize = (int)(long)arg->arg2;
+    int unit = (int)(long)arg->arg3;
+    int numCharsRead;
+    int ret = kernTermRead(buffer, bufferSize, unit, &numCharsRead);
+    arg->arg2 = (void*)(long)numCharsRead;
+    arg->arg4 = (void*)(long)ret;
+}
+
 int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     return 0;
 }
 
-int kernTermWrite(char* buffer, int bufferSize, int unitID,
-        int* numCharsRead) {
+void termWriteHelper(USLOSS_Sysargs* arg) {
+    char* buffer = (char*)(long)arg->arg1;
+    int bufferSize = (int)(long)arg->arg2;
+    int unit = (int)(long)arg->arg3;
+    int numCharsRead;
+    int ret = kernTermWrite(buffer, bufferSize, unit, &numCharsRead);
+    arg->arg2 = (void*)(long)numCharsRead;
+    arg->arg4 = (void*)(long)ret;
+}
+
+int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
+
     return 0;
+}
+
+int termDaemon(char* arg) {
+    int unit = atoi(arg);
+    int status;
+    while (1) {
+        waitDevice(USLOSS_TERM_DEV, unit, &status);
+    }
 }
