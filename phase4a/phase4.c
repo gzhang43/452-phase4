@@ -76,7 +76,6 @@ int kernSleep(int seconds) {
 
 int sleepDaemon(char* arg) {
     int status;
-    USLOSS_Console("Daemon\n");
     while(1) {
         waitDevice(USLOSS_CLOCK_DEV, 0, &status);
         globalTime++;
