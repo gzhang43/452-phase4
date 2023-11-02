@@ -10,6 +10,7 @@
 #include "phase4_usermode.h"
 
 void sleepHelper(USLOSS_Sysargs* arg);
+int sleepDaemon(char* arg);
 
 typedef struct PCB {
     int pid;
@@ -26,17 +27,16 @@ int globalTime;
 
 void phase4_init(void) {
     systemCallVec[12] = sleepHelper;
-    
-    fork1("sleepDaemon", NULL, NULL, USLOSS_MIN_STACK, 7);
+    globalTime = 0;
 }
 
 void phase4_start_service_processes(void) {
-
+    fork1("sleepDaemon", sleepDaemon, NULL, USLOSS_MIN_STACK, 1);
 }
 
 void addToPQ(struct PCB* process) {
     int wakeupTime = process->wakeupTime;
-    if (wakeupPQ == NULL || wakeupTime < wakeupPQ->wakeupTime) {
+    if (wakeupPQ == NULL || wakeupTime <= wakeupPQ->wakeupTime) {
         process->nextInQueue = wakeupPQ;
         wakeupPQ = process;
         return;
@@ -63,6 +63,7 @@ int kernSleep(int seconds) {
     int pid = getpid();
     struct PCB* process = &processTable4[pid % MAXPROC];
     process->pid = pid;
+    process->wakeupTime = globalTime + (seconds * 10);
     process->mboxId = MboxCreate(1, 0);
 
     // Add process to wakeup priority queue and block
@@ -73,13 +74,19 @@ int kernSleep(int seconds) {
     return 0; 
 }
 
-void sleepDaemon() {
+int sleepDaemon(char* arg) {
     int status;
     while(1) {
         waitDevice(USLOSS_CLOCK_DEV, 0, &status);
-        // TODO: Wakeup all necessary processes
+        globalTime++;
+        while (wakeupPQ != NULL && globalTime >= wakeupPQ->wakeupTime) {
+            PCB* process = wakeupPQ;
+            wakeupPQ = wakeupPQ->nextInQueue;
+            MboxCondSend(process->mboxId, NULL, 0);
+        }
     }
 }
+
 
 int kernDiskRead(void* diskBuffer, int unit, int track, int first, 
         int sectors, int* status) {
