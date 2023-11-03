@@ -1,4 +1,10 @@
-//phase4
+/*
+Assignment: Phase 4a
+Group: Grace Zhang and Ellie Martin
+Course: CSC 452 (Operating Systems)
+Instructors: Russell Lewis and Ben Dicken
+Due Date: 11/8/23
+*/
 
 #include <stdio.h>
 #include <string.h>
@@ -34,14 +40,19 @@ int term1Mbox;
 int term2Mbox;
 int term3Mbox;
 
+// Mailboxes to hold lines read
+int termReadMboxIds[4];
+char termBuffers[4][MAXLINE+1];
+
 void phase4_init(void) {
     systemCallVec[1] = termReadHelper;
     systemCallVec[2] = termWriteHelper;
     systemCallVec[12] = sleepHelper;
+
     globalTime = 0;
 
     int cr_val = 0x2; // recv int enable
-    cr_val |= 0x4;
+    cr_val |= 0x4; // xmit int enable
 
     USLOSS_DeviceOutput(USLOSS_TERM_DEV, 0, (void*)(long)cr_val);
     USLOSS_DeviceOutput(USLOSS_TERM_DEV, 1, (void*)(long)cr_val);
@@ -52,6 +63,11 @@ void phase4_init(void) {
     term1Mbox = MboxCreate(1, 0);
     term2Mbox = MboxCreate(1, 0);
     term3Mbox = MboxCreate(1, 0);
+
+    termReadMboxIds[0] = MboxCreate(10, MAXLINE+1);
+    termReadMboxIds[1] = MboxCreate(10, MAXLINE+1);
+    termReadMboxIds[2] = MboxCreate(10, MAXLINE+1);
+    termReadMboxIds[3] = MboxCreate(10, MAXLINE+1);
 }
 
 void phase4_start_service_processes(void) {
@@ -115,7 +131,6 @@ int sleepDaemon(char* arg) {
     }
 }
 
-
 int kernDiskRead(void* diskBuffer, int unit, int track, int first, 
         int sectors, int* status) {
     return 0;
@@ -155,7 +170,6 @@ void termWriteHelper(USLOSS_Sysargs* arg) {
 }
 
 int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
-
     return 0;
 }
 
@@ -164,5 +178,18 @@ int termDaemon(char* arg) {
     int status;
     while (1) {
         waitDevice(USLOSS_TERM_DEV, unit, &status);
+
+        // Check if character has been received and stored in status reg
+        if (USLOSS_TERM_STAT_RECV(status) == USLOSS_DEV_BUSY) {
+            char c = USLOSS_TERM_STAT_CHAR(status); 
+            if (strlen(termBuffers[unit]) < MAXLINE) {
+                strncat(termBuffers[unit], &c, 1);
+            }
+            if (strlen(termBuffers[unit]) == MAXLINE || c == '\n') {
+                MboxCondSend(termReadMboxIds[unit], termBuffers[unit], MAXLINE);
+                memset(termBuffers[unit], 0, sizeof termBuffers[unit]);
+            }
+        }
+        // TODO: Check if xmit is ready
     }
 }
