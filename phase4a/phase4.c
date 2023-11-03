@@ -30,6 +30,7 @@ typedef struct PCB {
     int wakeupTime;
     struct PCB* nextInQueue;
     struct PCB* prevInQueue;
+    struct PCB* nextWriteProcess;
 } PCB;
 
 struct PCB processTable4[MAXPROC+1];
@@ -40,6 +41,10 @@ int term0Mbox;
 int term1Mbox;
 int term2Mbox;
 int term3Mbox;
+
+int termWriteMbox[4];
+struct PCB* writeProcesses[4];
+int termInUse[4];
 
 // Mailboxes to hold lines read
 int termReadMboxIds[4];
@@ -60,10 +65,15 @@ void phase4_init(void) {
     USLOSS_DeviceOutput(USLOSS_TERM_DEV, 2, (void*)(long)cr_val);
     USLOSS_DeviceOutput(USLOSS_TERM_DEV, 3, (void*)(long)cr_val);
 
-    term0Mbox = MboxCreate(1, 0);
-    term1Mbox = MboxCreate(1, 0);
-    term2Mbox = MboxCreate(1, 0);
-    term3Mbox = MboxCreate(1, 0);
+    termInUse[0] = 0;
+    termInUse[1] = 0;
+    termInUse[2] = 0;
+    termInUse[3] = 0;
+
+    termWriteMbox[0] = MboxCreate(1, 0);
+    termWriteMbox[1] = MboxCreate(1, 0);
+    termWriteMbox[2] = MboxCreate(1, 0);
+    termWriteMbox[3] = MboxCreate(1, 0);
 
     termReadMboxIds[0] = MboxCreate(10, MAXLINE+1);
     termReadMboxIds[1] = MboxCreate(10, MAXLINE+1);
@@ -196,6 +206,48 @@ void termWriteHelper(USLOSS_Sysargs* arg) {
     arg->arg4 = (void*)(long)ret;
 }
 
+int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
+    if (unitID < 0 || unitID > 4 || bufferSize <= 0) {
+        return -1;
+    }
+    int pid = getpid();
+    struct PCB* process = &processTable4[pid % MAXPROC];
+    process->pid = pid;
+    process->mboxId = MboxCreate(1, 0);
+    if (writeProcesses[unitID] == NULL && termInUse[unitID] == 1) {
+        writeProcesses[unitID] = process;
+        MboxRecv(process->mboxId, NULL, 0); // block with mailbox
+    }
+    else if (termInUse[unitID] == 1) {
+        PCB* queue = writeProcesses[unitID];
+        while (queue->nextWriteProcess != NULL) {
+            queue = queue->nextWriteProcess;
+        }
+        queue->nextWriteProcess = process;
+        MboxRecv(process->mboxId, NULL, 0); // block with mailbox
+    }
+
+    termInUse[unitID] = 1;
+    int i = 0;
+    while (i < bufferSize) {
+        if (i+1 > MAXLINE) {
+            break;
+        }
+        MboxRecv(termWriteMbox[unitID], NULL, 0);
+        int crVal = 0x1; // this turns on the ’send char’ bit (USLOSS spec page 9)
+        crVal |= 0x2; // recv int enable
+        crVal |= 0x4; // xmit int enable
+        crVal |= (buffer[i] << 8); // the character to send
+        //USLOSS_Console("writing %c\n", buffer[i]);
+        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unitID, (void*)(long)crVal);
+        i++;
+    }
+    *numCharsRead = i;
+    MboxRelease(process->mboxId);
+    termInUse[unitID] = 0;
+    return 0;
+}
+
 int termDaemon(char* arg) {
     int unit = atoi(arg);
     int status;
@@ -214,5 +266,15 @@ int termDaemon(char* arg) {
             }
         }
         // TODO: Check if xmit is ready
+        if (USLOSS_TERM_STAT_XMIT(status) == USLOSS_DEV_READY) {
+            if (termInUse[unit] == 0 && writeProcesses[unit] != NULL) {
+                PCB* process = writeProcesses[unit];
+                writeProcesses[unit] = writeProcesses[unit]->nextWriteProcess;
+                MboxCondSend(process->mboxId, NULL, 0);
+            }
+            else {
+                MboxCondSend(termWriteMbox[unit], NULL, 0);
+            }
+        }
     }
 }
