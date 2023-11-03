@@ -101,13 +101,6 @@ void addToPQ(struct PCB* process) {
     process->nextInQueue = temp; 
 }
 
-void sleepHelper(USLOSS_Sysargs* arg) {
-    int seconds = (int)(long)arg->arg1;
-    int ret = kernSleep(seconds);
-    arg->arg4 = (void*)(long)ret;
-    return;
-}
-
 int kernSleep(int seconds) {
     int pid = getpid();
     struct PCB* process = &processTable4[pid % MAXPROC];
@@ -121,6 +114,13 @@ int kernSleep(int seconds) {
 
     MboxRelease(process->mboxId);
     return 0; 
+}
+
+void sleepHelper(USLOSS_Sysargs* arg) {
+    int seconds = (int)(long)arg->arg1;
+    int ret = kernSleep(seconds);
+    arg->arg4 = (void*)(long)ret;
+    return;
 }
 
 int sleepDaemon(char* arg) {
@@ -158,16 +158,6 @@ int diskDaemon(char* arg) {
     }
 }
 
-void termReadHelper(USLOSS_Sysargs* arg) {
-    char* buffer = (char*)(long)arg->arg1;
-    int bufferSize = (int)(long)arg->arg2;
-    int unit = (int)(long)arg->arg3;
-    int numCharsRead;
-    int ret = kernTermRead(buffer, bufferSize, unit, &numCharsRead);
-    arg->arg2 = (void*)(long)numCharsRead;
-    arg->arg4 = (void*)(long)ret;
-}
-
 int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     if (unitID < 0 || unitID > 4 || bufferSize <= 0) {
         return -1;
@@ -182,6 +172,20 @@ int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     return 0;
 }
 
+void termReadHelper(USLOSS_Sysargs* arg) {
+    char* buffer = (char*)(long)arg->arg1;
+    int bufferSize = (int)(long)arg->arg2;
+    int unit = (int)(long)arg->arg3;
+    int numCharsRead;
+    int ret = kernTermRead(buffer, bufferSize, unit, &numCharsRead);
+    arg->arg2 = (void*)(long)numCharsRead;
+    arg->arg4 = (void*)(long)ret;
+}
+
+int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
+    return 0;
+}
+
 void termWriteHelper(USLOSS_Sysargs* arg) {
     char* buffer = (char*)(long)arg->arg1;
     int bufferSize = (int)(long)arg->arg2;
@@ -190,10 +194,6 @@ void termWriteHelper(USLOSS_Sysargs* arg) {
     int ret = kernTermWrite(buffer, bufferSize, unit, &numCharsRead);
     arg->arg2 = (void*)(long)numCharsRead;
     arg->arg4 = (void*)(long)ret;
-}
-
-int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
-    return 0;
 }
 
 int termDaemon(char* arg) {
