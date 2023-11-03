@@ -21,6 +21,7 @@ void sleepHelper(USLOSS_Sysargs* arg);
 void termReadHelper(USLOSS_Sysargs* arg);
 void termWriteHelper(USLOSS_Sysargs* arg);
 int sleepDaemon(char* arg);
+int diskDaemon(char* arg);
 int termDaemon(char* arg);
 
 typedef struct PCB {
@@ -72,10 +73,14 @@ void phase4_init(void) {
 
 void phase4_start_service_processes(void) {
     fork1("sleepDaemon", sleepDaemon, NULL, USLOSS_MIN_STACK, 1);
+    
     fork1("term0Daemon", termDaemon, "0", USLOSS_MIN_STACK, 1);
     fork1("term1Daemon", termDaemon, "1", USLOSS_MIN_STACK, 1);
     fork1("term2Daemon", termDaemon, "2", USLOSS_MIN_STACK, 1);
     fork1("term3Daemon", termDaemon, "3", USLOSS_MIN_STACK, 1);
+    
+    // fork1("disk0Daemon", diskDaemon, "0", USLOSS_MIN_STACK, 1);
+    // fork1("disk1Daemon", diskDaemon, "1", USLOSS_MIN_STACK, 1);
 }
 
 void addToPQ(struct PCB* process) {
@@ -145,6 +150,14 @@ int kernDiskSize(int unit, int* sector, int* track, int* disk) {
     return 0;
 }
 
+int diskDaemon(char* arg) {
+    int unit = atoi(arg);
+    int status;
+    while (1) {
+        waitDevice(USLOSS_DISK_DEV, unit, &status);
+    }
+}
+
 void termReadHelper(USLOSS_Sysargs* arg) {
     char* buffer = (char*)(long)arg->arg1;
     int bufferSize = (int)(long)arg->arg2;
@@ -156,6 +169,16 @@ void termReadHelper(USLOSS_Sysargs* arg) {
 }
 
 int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
+    if (unitID < 0 || unitID > 4 || bufferSize <= 0) {
+        return -1;
+    }
+    char temp[MAXLINE+1];
+    MboxRecv(termReadMboxIds[unitID], temp, MAXLINE+1);
+    strncpy(buffer, temp, bufferSize);
+    if (bufferSize <= MAXLINE) {
+        buffer[bufferSize] = '\0';
+    }
+    *numCharsRead = strlen(buffer);
     return 0;
 }
 
