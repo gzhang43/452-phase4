@@ -17,6 +17,8 @@ Due Date: 11/8/23
 #include "phase3_usermode.h"
 #include "phase4_usermode.h"
 
+#define DEBUG_MODE 0
+
 void sleepHelper(USLOSS_Sysargs* arg);
 void termReadHelper(USLOSS_Sysargs* arg);
 void termWriteHelper(USLOSS_Sysargs* arg);
@@ -37,18 +39,13 @@ struct PCB processTable4[MAXPROC+1];
 struct PCB* wakeupPQ;
 
 int globalTime;
-int term0Mbox;
-int term1Mbox;
-int term2Mbox;
-int term3Mbox;
 
 int termWriteMbox[4];
 struct PCB* writeProcesses[4];
 int termInUse[4];
 
-// Mailboxes to hold lines read
-int termReadMboxIds[4];
-char termBuffers[4][MAXLINE+1];
+int termReadMboxIds[4]; // mailboxes to hold lines read
+char termBuffers[4][MAXLINE+1]; // single line buffer for each terminal
 
 void phase4_init(void) {
     systemCallVec[1] = termReadHelper;
@@ -111,13 +108,6 @@ void addToPQ(struct PCB* process) {
     process->nextInQueue = temp; 
 }
 
-void sleepHelper(USLOSS_Sysargs* arg) {
-    int seconds = (int)(long)arg->arg1;
-    int ret = kernSleep(seconds);
-    arg->arg4 = (void*)(long)ret;
-    return;
-}
-
 int kernSleep(int seconds) {
     int pid = getpid();
     struct PCB* process = &processTable4[pid % MAXPROC];
@@ -131,6 +121,13 @@ int kernSleep(int seconds) {
 
     MboxRelease(process->mboxId);
     return 0; 
+}
+
+void sleepHelper(USLOSS_Sysargs* arg) {
+    int seconds = (int)(long)arg->arg1;
+    int ret = kernSleep(seconds);
+    arg->arg4 = (void*)(long)ret;
+    return;
 }
 
 int sleepDaemon(char* arg) {
@@ -168,16 +165,6 @@ int diskDaemon(char* arg) {
     }
 }
 
-void termReadHelper(USLOSS_Sysargs* arg) {
-    char* buffer = (char*)(long)arg->arg1;
-    int bufferSize = (int)(long)arg->arg2;
-    int unit = (int)(long)arg->arg3;
-    int numCharsRead;
-    int ret = kernTermRead(buffer, bufferSize, unit, &numCharsRead);
-    arg->arg2 = (void*)(long)numCharsRead;
-    arg->arg4 = (void*)(long)ret;
-}
-
 int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     if (unitID < 0 || unitID > 4 || bufferSize <= 0) {
         return -1;
@@ -190,6 +177,16 @@ int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     }
     *numCharsRead = strlen(buffer);
     return 0;
+}
+
+void termReadHelper(USLOSS_Sysargs* arg) {
+    char* buffer = (char*)(long)arg->arg1;
+    int bufferSize = (int)(long)arg->arg2;
+    int unit = (int)(long)arg->arg3;
+    int numCharsRead;
+    int ret = kernTermRead(buffer, bufferSize, unit, &numCharsRead);
+    arg->arg2 = (void*)(long)numCharsRead;
+    arg->arg4 = (void*)(long)ret;
 }
 
 void termWriteHelper(USLOSS_Sysargs* arg) {
@@ -230,11 +227,14 @@ int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
             break;
         }
         MboxRecv(termWriteMbox[unitID], NULL, 0);
-        int crVal = 0x1; // this turns on the ’send char’ bit (USLOSS spec page 9)
+        int crVal = 0x1; // this turns on the send char bit (USLOSS spec page 9)
         crVal |= 0x2; // recv int enable
         crVal |= 0x4; // xmit int enable
         crVal |= (buffer[i] << 8); // the character to send
-        //USLOSS_Console("writing %c\n", buffer[i]);
+        
+        if (DEBUG_MODE == 1) {
+            USLOSS_Console("writing %c\n", buffer[i]);
+        }
         USLOSS_DeviceOutput(USLOSS_TERM_DEV, unitID, (void*)(long)crVal);
         i++;
     }
@@ -261,7 +261,7 @@ int termDaemon(char* arg) {
                 memset(termBuffers[unit], 0, sizeof termBuffers[unit]);
             }
         }
-        // TODO: Check if xmit is ready
+        // Check if able to write char to terminal
         if (USLOSS_TERM_STAT_XMIT(status) == USLOSS_DEV_READY) {
             if (termInUse[unit] == 0 && writeProcesses[unit] != NULL) {
                 PCB* process = writeProcesses[unit];
