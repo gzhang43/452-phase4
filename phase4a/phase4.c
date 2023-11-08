@@ -279,6 +279,18 @@ void termReadHelper(USLOSS_Sysargs* arg) {
     arg->arg4 = (void*)(long)ret;
 }
 
+/*
+Helper function for termWrite, called by the termWrite syscall
+
+Parameters:
+    arg->arg1 - buffer pointer
+    arg->arg2 - length of the buffer
+    arg->arg3 - the unit number of the terminal to read
+
+Outputs:
+    arg->arg2: the number of characters read
+    arg->arg4: -1 if illegal values were given as input and 0 otherwise
+*/
 void termWriteHelper(USLOSS_Sysargs* arg) {
     char* buffer = (char*)(long)arg->arg1;
     int bufferSize = (int)(long)arg->arg2;
@@ -289,6 +301,22 @@ void termWriteHelper(USLOSS_Sysargs* arg) {
     arg->arg4 = (void*)(long)ret;
 }
 
+/*
+Syscall function that will write a char buffer to a given terminal.
+If the terminal specified is in use, then the curent process is added to
+a queue and blocked.
+If the terminal is not in use, begins the write process by repeatedly writing
+a single character, blocking on a mailbox each time until the daemon sends
+a message to continue.
+
+Parameters:
+    buffer - the buffer pointer
+    bufferSize - the length of the buffer
+    unitID - which terminal to read from
+    numCharsRead - out pointer for the number of characters read
+
+Returns: -1 if illegal values were given as input and 0 otherwise.
+*/
 int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     if (unitID < 0 || unitID > 4 || bufferSize <= 0) {
         return -1;
@@ -297,6 +325,8 @@ int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     struct PCB* process = &processTable4[pid % MAXPROC];
     process->pid = pid;
     process->mboxId = MboxCreate(1, 0);
+
+    //add process to queue if terminal is in use
     if (writeProcesses[unitID] == NULL && termInUse[unitID] == 1) {
         writeProcesses[unitID] = process;
         MboxRecv(process->mboxId, NULL, 0); // block with mailbox
@@ -310,14 +340,14 @@ int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
         MboxRecv(process->mboxId, NULL, 0); // block with mailbox
     }
 
-    termInUse[unitID] = 1;
+    termInUse[unitID] = 1; //indicates this terminal as being in use
     int i = 0;
     while (i < bufferSize) {
         if (i+1 > MAXLINE) {
             break;
         }
         MboxRecv(termWriteMbox[unitID], NULL, 0);
-        int crVal = 0x1; // this turns on the send char bit (USLOSS spec page 9)
+        int crVal = 0x1; // turns on the send char bit
         crVal |= 0x2; // recv int enable
         crVal |= 0x4; // xmit int enable
         crVal |= (buffer[i] << 8); // the character to send
@@ -325,7 +355,7 @@ int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
         if (DEBUG_MODE == 1) {
             USLOSS_Console("writing %c\n", buffer[i]);
         }
-        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unitID, (void*)(long)crVal);
+        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unitID, (void*)(long)crVal); //writes to terminal
         i++;
     }
     *numCharsRead = i;
@@ -334,6 +364,16 @@ int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     return 0;
 }
 
+/*
+Daemon process for all terminal syscall functions. It reads the recv and xmit
+bit of the status register, and will send messages to unblock processes that
+are waiting to read or write.
+
+Parameters:
+    arg - which terminal to read and/or write to
+
+Returns: Does not return.
+*/
 int termDaemon(char* arg) {
     int unit = atoi(arg);
     int status;
@@ -353,6 +393,8 @@ int termDaemon(char* arg) {
         }
         // Check if able to write char to terminal
         if (USLOSS_TERM_STAT_XMIT(status) == USLOSS_DEV_READY) {
+
+            //either wake up process from queue or unblocks currently writing process
             if (termInUse[unit] == 0 && writeProcesses[unit] != NULL) {
                 PCB* process = writeProcesses[unit];
                 writeProcesses[unit] = writeProcesses[unit]->nextWriteProcess;
