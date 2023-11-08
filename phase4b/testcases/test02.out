@@ -1,0 +1,52 @@
+phase5_start_service_processes() called -- currently a NOP
+start4(): Spawning Child(0)
+start4(): Spawning Child(1)
+start4(): Spawning Child(2)
+start4(): Spawning Child(3)
+start4(): Spawning Child(4)
+start4(): Spawning Child(5)
+start4(): Spawning Child(6)
+start4(): Spawning Child(7)
+start4(): Spawning Child(8)
+start4(): Spawning Child(9)
+start4(): Waiting on Child
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): Sleeping for 3 seconds
+Child9(): After sleeping 3 seconds, difference in system clock is 3269553
+Child9(): After sleeping 3 seconds, difference in system clock is 3269594
+Child9(): After sleeping 3 seconds, difference in system clock is 3269641
+Child9(): After sleeping 3 seconds, difference in system clock is 3269686
+Child9(): After sleeping 3 seconds, difference in system clock is 3269721
+Child9(): After sleeping 3 seconds, difference in system clock is 3269765
+Child9(): After sleeping 3 seconds, difference in system clock is 3269802
+Child9(): After sleeping 3 seconds, difference in system clock is 3269845
+Child9(): After sleeping 3 seconds, difference in system clock is 3269882
+Child9(): After sleeping 3 seconds, difference in system clock is 3269923
+start4(): Wait returned 0, pid:22, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:21, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:20, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:19, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:18, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:17, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:16, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:15, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:14, status 19
+start4(): Waiting on Child
+start4(): Wait returned 0, pid:13, status 19
+finish(): The simulation is now terminating.
