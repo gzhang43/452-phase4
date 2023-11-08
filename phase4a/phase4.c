@@ -4,6 +4,13 @@ Group: Grace Zhang and Ellie Martin
 Course: CSC 452 (Operating Systems)
 Instructors: Russell Lewis and Ben Dicken
 Due Date: 11/8/23
+
+Description: Code for Phase 4a of our operating systems kernel that implements
+syscalls for TermRead(), TermWrite(), and Sleep(). These syscalls allow a 
+process to sleep for a specified number of seconds and to read and write 
+characters from each of the four terminals.
+
+To compile with testcases, run the Makefile.
 */
 
 #include <stdio.h>
@@ -38,7 +45,7 @@ typedef struct PCB {
 struct PCB processTable4[MAXPROC+1];
 struct PCB* wakeupPQ;
 
-int globalTime;
+int globalTime; // number of clock ticks since start of program
 
 int termWriteMbox[4];
 struct PCB* writeProcesses[4];
@@ -47,6 +54,10 @@ int termInUse[4];
 int termReadMboxIds[4]; // mailboxes to hold lines read
 char termBuffers[4][MAXLINE+1]; // single line buffer for each terminal
 
+/*
+Initializes data structures and variables required for Phase 4, such as the
+system call vector, terminal mailboxes, and the terminal control registers. 
+*/
 void phase4_init(void) {
     systemCallVec[1] = termReadHelper;
     systemCallVec[2] = termWriteHelper;
@@ -57,6 +68,7 @@ void phase4_init(void) {
     int cr_val = 0x2; // recv int enable
     cr_val |= 0x4; // xmit int enable
 
+    // Mask off read and write interrupts for each terminal
     USLOSS_DeviceOutput(USLOSS_TERM_DEV, 0, (void*)(long)cr_val);
     USLOSS_DeviceOutput(USLOSS_TERM_DEV, 1, (void*)(long)cr_val);
     USLOSS_DeviceOutput(USLOSS_TERM_DEV, 2, (void*)(long)cr_val);
@@ -78,6 +90,10 @@ void phase4_init(void) {
     termReadMboxIds[3] = MboxCreate(10, MAXLINE+1);
 }
 
+/*
+Starts the daemon process for each device being used (one clock and four
+terminals).
+*/
 void phase4_start_service_processes(void) {
     fork1("sleepDaemon", sleepDaemon, NULL, USLOSS_MIN_STACK, 1);
     
@@ -90,6 +106,17 @@ void phase4_start_service_processes(void) {
     // fork1("disk1Daemon", diskDaemon, "1", USLOSS_MIN_STACK, 1);
 }
 
+/*
+Function that adds a process's PCB to a priority queue, where the priority
+is the wakeup time of the process. The queue is implemented as a linked list,
+and the function iterates through the list to find the spot to insert a 
+process at.
+
+Parameters:
+    process - the struct PCB of the process to add to the queue
+
+Returns: None
+*/
 void addToPQ(struct PCB* process) {
     int wakeupTime = process->wakeupTime;
     if (wakeupPQ == NULL || wakeupTime <= wakeupPQ->wakeupTime) {
@@ -108,6 +135,16 @@ void addToPQ(struct PCB* process) {
     process->nextInQueue = temp; 
 }
 
+/*
+Syscall that pauses the current process for the specified number of seconds.
+The process is added to a priority queue and blocked, and is unblocked and
+removed from the queue when the wakeup time has been reached
+
+Parameters:
+    seconds - the number of seconds to pause the process for
+
+Returns: -1 if illegal values were given as input, and 0 otherwise.
+*/
 int kernSleep(int seconds) {
     int pid = getpid();
     struct PCB* process = &processTable4[pid % MAXPROC];
@@ -123,6 +160,15 @@ int kernSleep(int seconds) {
     return 0; 
 }
 
+/*
+Helper function for Sleep.
+
+Parameters:
+    arg.arg1: the number of seconds to pause the current process for
+
+Outputs:
+    arg.arg4: -1 if illegal values were given as input; 0 otherwise
+*/
 void sleepHelper(USLOSS_Sysargs* arg) {
     int seconds = (int)(long)arg->arg1;
     int ret = kernSleep(seconds);
@@ -130,6 +176,16 @@ void sleepHelper(USLOSS_Sysargs* arg) {
     return;
 }
 
+/*
+Daemon process that waits on the clock device for interrupts to be sent, and
+removes and wakes up processes from the priority queue upon each interrupt if
+necessary. Also increments globalTime upon each interrupt. 
+
+Parameters:
+    arg - required for fork
+
+Returns: Does not return.
+*/
 int sleepDaemon(char* arg) {
     int status;
     while(1) {
@@ -157,6 +213,14 @@ int kernDiskSize(int unit, int* sector, int* track, int* disk) {
     return 0;
 }
 
+/*
+Daemon process that is forked for each disk device.
+
+Parameters:
+    arg - the unitNo of the disk device
+
+Returns: Does not return.
+*/
 int diskDaemon(char* arg) {
     int unit = atoi(arg);
     int status;
@@ -165,6 +229,20 @@ int diskDaemon(char* arg) {
     }
 }
 
+/*
+Syscall that performs a read of one of the terminals by returning the first
+line of the terminal's buffer. A buffer can hold up to 10 lines, and is
+implemented using a mailbox, and a line either ends with a newline or is
+exactly MAXLINE characters long.
+
+Parameters:
+    buffer - the buffer pointer (to use for output)
+    bufferSize - the length of the buffer
+    unitID - which terminal to read from
+    numCharsRead - out pointer for the number of characters read
+
+Returns: -1 if illegal values were given as input and 0 otherwise.
+*/
 int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     if (unitID < 0 || unitID > 4 || bufferSize <= 0) {
         return -1;
@@ -179,6 +257,18 @@ int kernTermRead(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
     return 0;
 }
 
+/*
+Helper function for TermRead.
+
+Parameters:
+    arg.arg1 - buffer pointer
+    arg.arg2 - length of the buffer
+    arg.arg3 - the unit number of the terminal to read
+    
+Outputs:
+    arg.arg2: the number of characters read
+    arg.arg4: -1 if illegal values were given as input and 0 otherwise
+*/
 void termReadHelper(USLOSS_Sysargs* arg) {
     char* buffer = (char*)(long)arg->arg1;
     int bufferSize = (int)(long)arg->arg2;
