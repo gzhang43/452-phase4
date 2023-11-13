@@ -29,6 +29,8 @@ To compile with testcases, run the Makefile.
 void sleepHelper(USLOSS_Sysargs* arg);
 void termReadHelper(USLOSS_Sysargs* arg);
 void termWriteHelper(USLOSS_Sysargs* arg);
+void diskSizeKern(USLOSS_Sysargs* arg);
+int kernDiskSize(int unit, int* sector, int* track, int* disk); 
 int sleepDaemon(char* arg);
 int diskDaemon(char* arg);
 int termDaemon(char* arg);
@@ -41,6 +43,12 @@ typedef struct PCB {
     struct PCB* prevInQueue;
     struct PCB* nextWriteProcess;
 } PCB;
+
+struct DiskState {
+    USLOSS_DeviceRequest req;
+    int numTracks;
+    int currMboxId;
+} disks[2];
 
 struct PCB processTable4[MAXPROC+1];
 struct PCB* wakeupPQ;
@@ -62,6 +70,7 @@ void phase4_init(void) {
     systemCallVec[1] = termReadHelper;
     systemCallVec[2] = termWriteHelper;
     systemCallVec[12] = sleepHelper;
+    systemCallVec[15] = diskSizeKern;
 
     globalTime = 0;
 
@@ -87,7 +96,7 @@ void phase4_init(void) {
     termReadMboxIds[0] = MboxCreate(10, MAXLINE+1);
     termReadMboxIds[1] = MboxCreate(10, MAXLINE+1);
     termReadMboxIds[2] = MboxCreate(10, MAXLINE+1);
-    termReadMboxIds[3] = MboxCreate(10, MAXLINE+1);
+    termReadMboxIds[3] = MboxCreate(10, MAXLINE+1); 
 }
 
 /*
@@ -102,8 +111,8 @@ void phase4_start_service_processes(void) {
     fork1("term2Daemon", termDaemon, "2", USLOSS_MIN_STACK, 1);
     fork1("term3Daemon", termDaemon, "3", USLOSS_MIN_STACK, 1);
     
-    // fork1("disk0Daemon", diskDaemon, "0", USLOSS_MIN_STACK, 1);
-    // fork1("disk1Daemon", diskDaemon, "1", USLOSS_MIN_STACK, 1);
+    fork1("disk0Daemon", diskDaemon, "0", USLOSS_MIN_STACK, 1);
+    fork1("disk1Daemon", diskDaemon, "1", USLOSS_MIN_STACK, 1);
 }
 
 /*
@@ -209,8 +218,27 @@ int kernDiskWrite(void* diskBuffer, int unit, int track, int first,
     return 0;
 }
 
-int kernDiskSize(int unit, int* sector, int* track, int* disk) {
-    return 0;
+void diskSizeKern(USLOSS_Sysargs* arg) {
+    int unit = (int)(long)arg->arg1;
+
+    int pid = getpid();
+    struct PCB* process = &processTable4[pid % MAXPROC];
+    process->pid = pid;
+    process->mboxId = MboxCreate(1, 0);
+    disks[unit].currMboxId = process->mboxId;
+
+    disks[unit].req.opr = USLOSS_DISK_TRACKS;
+    disks[unit].req.reg1 = &disks[unit].numTracks;
+
+    USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &disks[unit].req);
+    MboxRecv(process->mboxId, NULL, 0);
+
+    arg->arg1 = (void*)(long)512;
+    arg->arg2 = (void*)(long)16;
+    arg->arg3 = (void*)(long)disks[unit].numTracks;
+    arg->arg4 = (void*)(long)0;
+    
+    MboxRelease(process->mboxId);
 }
 
 /*
@@ -226,6 +254,12 @@ int diskDaemon(char* arg) {
     int status;
     while (1) {
         waitDevice(USLOSS_DISK_DEV, unit, &status);
+        if (status == USLOSS_DEV_READY) {
+            MboxCondSend(disks[unit].currMboxId, NULL, 0); 
+        }
+        else if (status == USLOSS_DEV_ERROR) {
+            USLOSS_Console("Error with disk request.\n");
+        }
     }
 }
 
@@ -355,7 +389,8 @@ int kernTermWrite(char* buffer, int bufferSize, int unitID, int* numCharsRead) {
         if (DEBUG_MODE == 1) {
             USLOSS_Console("writing %c\n", buffer[i]);
         }
-        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unitID, (void*)(long)crVal); //writes to terminal
+        // writes to terminal
+        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unitID, (void*)(long)crVal); 
         i++;
     }
     *numCharsRead = i;
@@ -393,8 +428,8 @@ int termDaemon(char* arg) {
         }
         // Check if able to write char to terminal
         if (USLOSS_TERM_STAT_XMIT(status) == USLOSS_DEV_READY) {
-
-            //either wake up process from queue or unblocks currently writing process
+            // either wake up process from queue or unblocks currently
+            // writing process
             if (termInUse[unit] == 0 && writeProcesses[unit] != NULL) {
                 PCB* process = writeProcesses[unit];
                 writeProcesses[unit] = writeProcesses[unit]->nextWriteProcess;
