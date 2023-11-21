@@ -16,6 +16,7 @@ To compile with testcases, run the Makefile.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <usloss.h>
 #include "phase1.h"
 #include "phase2.h"
@@ -29,8 +30,16 @@ To compile with testcases, run the Makefile.
 void sleepHelper(USLOSS_Sysargs* arg);
 void termReadHelper(USLOSS_Sysargs* arg);
 void termWriteHelper(USLOSS_Sysargs* arg);
+void diskReadKern(USLOSS_Sysargs* arg);
+void diskWriteKern(USLOSS_Sysargs* arg);
 void diskSizeKern(USLOSS_Sysargs* arg);
-int kernDiskSize(int unit, int* sector, int* track, int* disk); 
+
+int kernDiskSize(int unit, int* sector, int* track, int* disk);
+int kernDiskRead(void* diskBuffer, int unit, int track, int first,
+    int sectors, int* status);
+int kernDiskWrite(void* diskBuffer, int unit, int track, int first,
+    int sectors, int* status);
+
 int sleepDaemon(char* arg);
 int diskDaemon(char* arg);
 int termDaemon(char* arg);
@@ -44,10 +53,26 @@ typedef struct PCB {
     struct PCB* nextWriteProcess;
 } PCB;
 
+typedef struct UserDiskRequest {
+    int requestType;
+    void* buffer;
+    int startTrack;
+    int firstBlock;
+    int blocks;
+    int* statusOut;
+    int mboxId;
+    struct UserDiskRequest* nextReq;
+} UserDiskRequest;
+
 struct DiskState {
     USLOSS_DeviceRequest req;
     int numTracks;
     int currMboxId;
+    int currTrack;
+    int inUse;
+    int status;
+    struct UserDiskRequest* reqListFront;
+    struct UserDiskRequest* reqListBack;
 } disks[2];
 
 struct PCB processTable4[MAXPROC+1];
@@ -58,7 +83,6 @@ int globalTime; // number of clock ticks since start of program
 int termWriteMbox[4];
 struct PCB* writeProcesses[4];
 int termInUse[4];
-
 int termReadMboxIds[4]; // mailboxes to hold lines read
 char termBuffers[4][MAXLINE+1]; // single line buffer for each terminal
 
@@ -70,6 +94,8 @@ void phase4_init(void) {
     systemCallVec[1] = termReadHelper;
     systemCallVec[2] = termWriteHelper;
     systemCallVec[12] = sleepHelper;
+    systemCallVec[13] = diskReadKern;
+    systemCallVec[14] = diskWriteKern;
     systemCallVec[15] = diskSizeKern;
 
     globalTime = 0;
@@ -96,7 +122,12 @@ void phase4_init(void) {
     termReadMboxIds[0] = MboxCreate(10, MAXLINE+1);
     termReadMboxIds[1] = MboxCreate(10, MAXLINE+1);
     termReadMboxIds[2] = MboxCreate(10, MAXLINE+1);
-    termReadMboxIds[3] = MboxCreate(10, MAXLINE+1); 
+    termReadMboxIds[3] = MboxCreate(10, MAXLINE+1);
+
+    disks[0].currTrack = -1;
+    disks[1].currTrack = -1;
+    disks[0].inUse = 0;
+    disks[1].inUse = 0;
 }
 
 /*
@@ -142,6 +173,22 @@ void addToPQ(struct PCB* process) {
     struct PCB* temp = curr->nextInQueue;
     curr->nextInQueue = process;
     process->nextInQueue = temp; 
+}
+
+void addToDiskPQ(UserDiskRequest* req, UserDiskRequest** queue) {
+    int track = req->startTrack;
+    if (*queue == NULL || track < (*queue)->startTrack) {
+        req->nextReq = *queue;
+        *queue = req;
+        return;
+    }
+    UserDiskRequest* curr = *queue;
+    while (curr->nextReq != NULL && track > curr->nextReq->startTrack) {
+        curr = curr->nextReq;
+    }
+    UserDiskRequest* temp = curr->nextReq;
+    curr->nextReq = req;
+    req->nextReq = temp;
 }
 
 /*
@@ -208,37 +255,132 @@ int sleepDaemon(char* arg) {
     }
 }
 
-int kernDiskRead(void* diskBuffer, int unit, int track, int first, 
-        int sectors, int* status) {
-    return 0;
+void diskReadKern(USLOSS_Sysargs* arg) {
+    void* buffer = arg->arg1;
+    int blocks = (int)(long)arg->arg2;
+    int track = (int)(long)arg->arg3;
+    int firstBlock = (int)(long)arg->arg4;
+    int unit = (int)(long)arg->arg5;
+    int* status;
+
+    if (unit < 0 || unit > 1 || firstBlock < 0 || firstBlock > 15 ||
+            track < 0) {
+        arg->arg4 = (void*)(long)-1;
+        return;
+    }
+    
+    UserDiskRequest userRequest;
+    userRequest.requestType = USLOSS_DISK_READ;
+    userRequest.buffer = buffer;
+    userRequest.startTrack = track;
+    userRequest.firstBlock = firstBlock;
+    userRequest.blocks = blocks;
+    userRequest.mboxId = MboxCreate(1, 0);
+    disks[unit].currMboxId = userRequest.mboxId;
+    
+    bool emptyLists = disks[unit].reqListFront == NULL && 
+        disks[unit].reqListBack == NULL;
+
+    UserDiskRequest* list;
+    if (disks[unit].currTrack < track) {
+        addToDiskPQ(&userRequest, &disks[unit].reqListFront);
+    }
+    else {
+        addToDiskPQ(&userRequest, &disks[unit].reqListBack);
+    }
+
+    if (emptyLists && disks[unit].inUse == 0) {
+        USLOSS_DeviceRequest req;
+        req.opr = USLOSS_DISK_SEEK;
+        req.reg1 = (void*)(long)track;
+
+        disks[unit].inUse = 1;
+        disks[unit].currTrack = track;
+        disks[unit].req = req;
+        USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+    }
+    MboxRecv(userRequest.mboxId, NULL, 0);
+    disks[unit].inUse = 0;
+    MboxRelease(userRequest.mboxId);
+    arg->arg1 = (void*)(long)0;
+    arg->arg4 = (void*)(long)0;
+    if (disks[unit].status == USLOSS_DEV_ERROR) {
+        arg->arg1 = (void*)(long)disks[unit].status;
+    }
 }
 
-int kernDiskWrite(void* diskBuffer, int unit, int track, int first, 
-        int sectors, int* status) {
-    return 0;
+void diskWriteKern(USLOSS_Sysargs* arg) {
+    void* buffer = arg->arg1;
+    int blocks = (int)(long)arg->arg2;
+    int track = (int)(long)arg->arg3;
+    int firstBlock = (int)(long)arg->arg4;
+    int unit = (int)(long)arg->arg5;
+    int* status;
+
+    if (unit < 0 || unit > 1 || firstBlock < 0 || firstBlock > 15 ||
+            track < 0) {
+        arg->arg4 = (void*)(long)-1;
+        return;
+    }
+
+    UserDiskRequest userRequest;
+    userRequest.requestType = USLOSS_DISK_WRITE;
+    userRequest.buffer = buffer;
+    userRequest.startTrack = track;
+    userRequest.firstBlock = firstBlock;
+    userRequest.blocks = blocks;
+    userRequest.mboxId = MboxCreate(1, 0);
+    disks[unit].currMboxId = userRequest.mboxId;
+
+    bool emptyLists = disks[unit].reqListFront == NULL && 
+        disks[unit].reqListBack == NULL;
+
+    UserDiskRequest* list;
+    if (disks[unit].currTrack < track) {
+        addToDiskPQ(&userRequest, &disks[unit].reqListFront);
+    }
+    else {
+        addToDiskPQ(&userRequest, &disks[unit].reqListBack);
+    }
+
+    if (emptyLists && disks[unit].inUse == 0) {
+        USLOSS_DeviceRequest req;
+        req.opr = USLOSS_DISK_SEEK;
+        req.reg1 = (void*)(long)track;
+
+        disks[unit].inUse = 1;
+        disks[unit].currTrack = track;
+        disks[unit].req = req;
+        USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+    }
+    MboxRecv(userRequest.mboxId, NULL, 0);
+    disks[unit].inUse = 0;
+    MboxRelease(userRequest.mboxId);
+    arg->arg1 = (void*)(long)0;
+    arg->arg4 = (void*)(long)0;
+    if (disks[unit].status == USLOSS_DEV_ERROR) {
+        arg->arg1 = (void*)(long)disks[unit].status;
+    }
 }
 
 void diskSizeKern(USLOSS_Sysargs* arg) {
     int unit = (int)(long)arg->arg1;
 
-    int pid = getpid();
-    struct PCB* process = &processTable4[pid % MAXPROC];
-    process->pid = pid;
-    process->mboxId = MboxCreate(1, 0);
-    disks[unit].currMboxId = process->mboxId;
-
+    disks[unit].currMboxId = MboxCreate(1, 0);
     disks[unit].req.opr = USLOSS_DISK_TRACKS;
     disks[unit].req.reg1 = &disks[unit].numTracks;
+    disks[unit].inUse = 1;
 
     USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &disks[unit].req);
-    MboxRecv(process->mboxId, NULL, 0);
+    MboxRecv(disks[unit].currMboxId, NULL, 0);
 
+    disks[unit].inUse = 0;
     arg->arg1 = (void*)(long)512;
     arg->arg2 = (void*)(long)16;
     arg->arg3 = (void*)(long)disks[unit].numTracks;
     arg->arg4 = (void*)(long)0;
     
-    MboxRelease(process->mboxId);
+    MboxRelease(disks[unit].currMboxId);
 }
 
 /*
@@ -252,13 +394,92 @@ Returns: Does not return.
 int diskDaemon(char* arg) {
     int unit = atoi(arg);
     int status;
+    int prevRW = 0;
+    UserDiskRequest* currUserReq;
+
     while (1) {
         waitDevice(USLOSS_DISK_DEV, unit, &status);
-        if (status == USLOSS_DEV_READY) {
+        if (prevRW == 1) {
+            MboxCondSend(currUserReq->mboxId, NULL, 0);
+            prevRW = 0;
+        }
+        if (status == USLOSS_DEV_READY && disks[unit].req.opr == 
+                USLOSS_DISK_TRACKS) {
             MboxCondSend(disks[unit].currMboxId, NULL, 0); 
         }
+        else if (status == USLOSS_DEV_READY && (disks[unit].reqListFront != NULL ||
+                disks[unit].reqListBack != NULL)) {
+            // Swap queues if reached end of queue
+            if (disks[unit].reqListFront == NULL && disks[unit].reqListBack != NULL) {
+                disks[unit].reqListFront = disks[unit].reqListBack;
+                disks[unit].reqListBack = NULL;
+            }
+            currUserReq = disks[unit].reqListFront;
+            disks[unit].reqListFront = disks[unit].reqListFront->nextReq;
+            
+            char* buffer = currUserReq->buffer;
+            int currBlock = currUserReq->firstBlock;
+            int numBlocks = currUserReq->blocks;
+            int currTrack = currUserReq->startTrack;
+
+            if (currTrack != disks[unit].currTrack) {
+                USLOSS_DeviceRequest req;
+                req.opr = USLOSS_DISK_SEEK;
+                req.reg1 = (void*)(long)currTrack;
+                USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+                waitDevice(USLOSS_DISK_DEV, unit, &status);
+                if (status != USLOSS_DEV_READY) {
+                    USLOSS_Console("Error with disk operation.\n");
+                }
+                disks[unit].currTrack = currTrack;
+            }
+            int count = 0;
+            while (count < numBlocks) {
+                if (DEBUG_MODE == 1) {
+                    USLOSS_Console("Iteration %d\n", count);
+                }
+                if (currBlock > 15) {
+                    USLOSS_DeviceRequest req;
+                    req.opr = USLOSS_DISK_SEEK;
+                    req.reg1 = (void*)(long)currTrack + 1;
+                    currBlock = 0;
+
+                    USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+                    waitDevice(USLOSS_DISK_DEV, unit, &status);
+                    if (status != USLOSS_DEV_READY) {
+                        USLOSS_Console("Error with disk operation.\n");
+                    }
+                    currTrack++;
+                    disks[unit].currTrack = currTrack;
+                }
+                USLOSS_DeviceRequest req;
+                req.opr = currUserReq->requestType;
+                req.reg1 = (void*)(long)currBlock;
+                req.reg2 = (void*)buffer;
+                
+                USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+                if (count != numBlocks - 1) {
+                    waitDevice(USLOSS_DISK_DEV, unit, &status);
+                    if (status != USLOSS_DEV_READY) {
+                        USLOSS_Console("Error with disk operation.\n");
+                    }
+                }
+                else {
+                    prevRW = 1;
+                }
+                buffer += 512;
+                currBlock++;
+                count++;
+            }
+        } 
         else if (status == USLOSS_DEV_ERROR) {
-            USLOSS_Console("Error with disk request.\n");
+            disks[unit].status = USLOSS_DEV_ERROR;
+            if (prevRW == 1) {
+                MboxCondSend(currUserReq->mboxId, NULL, 0);
+            }
+            else {
+                MboxCondSend(disks[unit].currMboxId, NULL, 0); 
+            }
         }
     }
 }
