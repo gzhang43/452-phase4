@@ -29,8 +29,12 @@ To compile with testcases, run the Makefile.
 void sleepHelper(USLOSS_Sysargs* arg);
 void termReadHelper(USLOSS_Sysargs* arg);
 void termWriteHelper(USLOSS_Sysargs* arg);
+void diskReadKern(USLOSS_Sysargs* arg);
+void diskWriteKern(USLOSS_Sysargs* arg);
 void diskSizeKern(USLOSS_Sysargs* arg);
-int kernDiskSize(int unit, int* sector, int* track, int* disk); 
+int kernDiskSize(int unit, int* sector, int* track, int* disk);
+int kernDiskRead(void* diskBuffer, int unit, int track, int first, int sectors, int* status);
+int kernDiskWrite(void* diskBuffer, int unit, int track, int first, int sectors, int* status);
 int sleepDaemon(char* arg);
 int diskDaemon(char* arg);
 int termDaemon(char* arg);
@@ -44,10 +48,24 @@ typedef struct PCB {
     struct PCB* nextWriteProcess;
 } PCB;
 
+typedef struct UserDiskRequest {
+    void* buffer;
+    int startTrack;
+    int firstBlock;
+    int blocks;
+    int* statusOut;
+    int mboxId;
+    struct UserDiskRequest* nextReq;
+} UserDiskRequest;
+
 struct DiskState {
     USLOSS_DeviceRequest req;
     int numTracks;
     int currMboxId;
+    int currTrack;
+    int inUse;
+    struct UserDiskRequest* reqListFront;
+    struct UserDiskRequest* reqListBack;
 } disks[2];
 
 struct PCB processTable4[MAXPROC+1];
@@ -70,6 +88,8 @@ void phase4_init(void) {
     systemCallVec[1] = termReadHelper;
     systemCallVec[2] = termWriteHelper;
     systemCallVec[12] = sleepHelper;
+    systemCallVec[13] = diskReadKern;
+    systemCallVec[14] = diskWriteKern;
     systemCallVec[15] = diskSizeKern;
 
     globalTime = 0;
@@ -96,7 +116,12 @@ void phase4_init(void) {
     termReadMboxIds[0] = MboxCreate(10, MAXLINE+1);
     termReadMboxIds[1] = MboxCreate(10, MAXLINE+1);
     termReadMboxIds[2] = MboxCreate(10, MAXLINE+1);
-    termReadMboxIds[3] = MboxCreate(10, MAXLINE+1); 
+    termReadMboxIds[3] = MboxCreate(10, MAXLINE+1);
+
+    disks[0].currTrack = -1;
+    disks[1].currTrack = -1;
+    disks[0].inUse = 0;
+    disks[1].inUse = 0;
 }
 
 /*
@@ -142,6 +167,30 @@ void addToPQ(struct PCB* process) {
     struct PCB* temp = curr->nextInQueue;
     curr->nextInQueue = process;
     process->nextInQueue = temp; 
+}
+
+void addToDiskPQ(UserDiskRequest* req, int diskNum, int queueNum) {
+    int track = req->startTrack;
+    UserDiskRequest* queue;
+    if (queueNum == 1) {
+        queue = disks[diskNum].reqListFront;
+    }
+    else if (queueNum == 2) {
+        queue = disks[diskNum].reqListBack;
+    }
+    if (queue == NULL || track < queue->startTrack) {
+        req->nextReq = queue;
+        queue = req;
+        return;
+    }
+    UserDiskRequest* curr = queue;
+    while (curr->nextReq != NULL &&
+        track > curr->nextReq->startTrack) {
+        curr = curr->nextReq;
+    }
+    UserDiskRequest* temp = curr->nextReq;
+    curr->nextReq = req;
+    req->nextReq = temp;
 }
 
 /*
@@ -208,37 +257,67 @@ int sleepDaemon(char* arg) {
     }
 }
 
-int kernDiskRead(void* diskBuffer, int unit, int track, int first, 
-        int sectors, int* status) {
-    return 0;
+void diskReadKern(USLOSS_Sysargs* arg) {
+    void* buffer = arg->arg1;
+    int blocks = (int)(long)arg->arg2;
+    int track = (int)(long)arg->arg3;
+    int firstBlock = (int)(long)arg->arg4;
+    int unit = (int)(long)arg->arg5;
+
+    int* status;
 }
 
-int kernDiskWrite(void* diskBuffer, int unit, int track, int first, 
-        int sectors, int* status) {
-    return 0;
+void diskWriteKern(USLOSS_Sysargs* arg) {
+    void* buffer = arg->arg1;
+    int blocks = (int)(long)arg->arg2;
+    int track = (int)(long)arg->arg3;
+    int firstBlock = (int)(long)arg->arg4;
+    int unit = (int)(long)arg->arg5;
+    int* status;
+
+    UserDiskRequest userRequest;
+    userRequest.buffer = buffer;
+    userRequest.startTrack = track;
+    userRequest.firstBlock = firstBlock;
+    userRequest.blocks = blocks;
+    userRequest.mboxId = MboxCreate(1, 0);
+
+    /*
+    int listNum;
+    if (disks[unit].currTrack < track) {
+        listNum = 1;
+    }
+    else {
+        listNum = 2;
+    }
+    addToDiskPQ(&userRequest, unit, listNum);
+    */
+    if (disks[unit].reqListFront == NULL && disks[unit].reqListBack == NULL) {
+        USLOSS_DeviceRequest req;
+        req.opr = USLOSS_DISK_SEEK;
+        req.reg1 = (void*)(long)track;
+
+        USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+    }
+    MboxRecv(userRequest.mboxId, NULL, 0);
 }
 
 void diskSizeKern(USLOSS_Sysargs* arg) {
     int unit = (int)(long)arg->arg1;
 
-    int pid = getpid();
-    struct PCB* process = &processTable4[pid % MAXPROC];
-    process->pid = pid;
-    process->mboxId = MboxCreate(1, 0);
-    disks[unit].currMboxId = process->mboxId;
-
+    disks[unit].currMboxId = MboxCreate(1, 0);
     disks[unit].req.opr = USLOSS_DISK_TRACKS;
     disks[unit].req.reg1 = &disks[unit].numTracks;
 
     USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &disks[unit].req);
-    MboxRecv(process->mboxId, NULL, 0);
+    MboxRecv(disks[unit].currMboxId, NULL, 0);
 
     arg->arg1 = (void*)(long)512;
     arg->arg2 = (void*)(long)16;
     arg->arg3 = (void*)(long)disks[unit].numTracks;
     arg->arg4 = (void*)(long)0;
     
-    MboxRelease(process->mboxId);
+    MboxRelease(disks[unit].currMboxId);
 }
 
 /*
@@ -253,8 +332,10 @@ int diskDaemon(char* arg) {
     int unit = atoi(arg);
     int status;
     while (1) {
+        USLOSS_Console("BEFORE WAIT\n");
         waitDevice(USLOSS_DISK_DEV, unit, &status);
         if (status == USLOSS_DEV_READY) {
+            USLOSS_Console("REQUEST DONE\n");
             MboxCondSend(disks[unit].currMboxId, NULL, 0); 
         }
         else if (status == USLOSS_DEV_ERROR) {
