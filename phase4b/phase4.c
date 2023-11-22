@@ -256,7 +256,12 @@ int sleepDaemon(char* arg) {
 }
 
 /*
-Syscall process
+Syscall process that queues and begins a disk read request.
+Adds a user request to either the front or back priority queue
+based on the current and given track number. If there were no
+requests in the queue before and the disk is not currently in use,
+then the disks begins a new read request by seeking to the starting
+block (the rest of the read and seek requests are handled by the daemon)
 
 Parameters:
     arg1 - buffer pointer
@@ -322,7 +327,12 @@ void diskReadKern(USLOSS_Sysargs* arg) {
 }
 
 /*
-Syscall process that queues and begins a disk write process.
+Syscall process that queues and begins a disk write request.
+Adds a user request to either the front or back priority queue
+based on the current and given track number. If there were no 
+requests in the queue before and the disk is not currently in use,
+then the disks begins a new write request by seeking to the starting
+block (the rest of the write and seek requests are handled by the daemon)
 
 Parameters:
     arg1 - buffer pointer
@@ -455,6 +465,7 @@ int diskDaemon(char* arg) {
             int numBlocks = currUserReq->blocks;
             int currTrack = currUserReq->startTrack;
 
+            //seeks to correct track if they don't match
             if (currTrack != disks[unit].currTrack) {
                 USLOSS_DeviceRequest req;
                 req.opr = USLOSS_DISK_SEEK;
@@ -466,6 +477,8 @@ int diskDaemon(char* arg) {
                 }
                 disks[unit].currTrack = currTrack;
             }
+            
+            //loop for reading or writing the given number of blocks
             int count = 0;
             while (count < numBlocks) {
                 if (DEBUG_MODE == 1) {
