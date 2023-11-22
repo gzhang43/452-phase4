@@ -8,7 +8,9 @@ Due Date: 11/15/23
 Description: Code for Phase 4 of our operating systems kernel that implements
 syscalls for TermRead(), TermWrite(), Sleep(), DiskRead(), DiskWrite(), and 
 DiskSize(). These syscalls allow a process to sleep for a specified number of
-seconds and to read and write characters from each of the four terminals.
+seconds and to read and write characters from each of the four terminals. The
+disk syscalls allow for requests to be made to read, write, seek, and get the
+size of a disk.
 
 To compile with testcases, run the Makefile.
 */
@@ -175,6 +177,14 @@ void addToPQ(struct PCB* process) {
     process->nextInQueue = temp; 
 }
 
+/*
+Function that adds a UserDiskRequest to a queue used for the disk elevator
+algorithm.
+
+Parameters:
+    req - pointer to the disk request to add
+    queue - pointer to the queue to add to
+*/
 void addToDiskPQ(UserDiskRequest* req, UserDiskRequest** queue) {
     int track = req->startTrack;
     if (*queue == NULL || track < (*queue)->startTrack) {
@@ -261,7 +271,7 @@ Adds a user request to either the front or back priority queue
 based on the current and given track number. If there were no
 requests in the queue before and the disk is not currently in use,
 then the disks begins a new read request by seeking to the starting
-block (the rest of the read and seek requests are handled by the daemon)
+block (the rest of the read and seek requests are handled by the daemon).
 
 Parameters:
     arg1 - buffer pointer
@@ -270,7 +280,9 @@ Parameters:
     arg4 - starting block number
     arg5 - which disk to access
 
-Returns: does not return
+Outputs:
+    arg1 - 0 if the transfer was successful; disk status register otherwise
+    arg4 - -1 if illegal values were given as input; 0 otherwise
 */
 void diskReadKern(USLOSS_Sysargs* arg) {
     void* buffer = arg->arg1;
@@ -332,7 +344,8 @@ Adds a user request to either the front or back priority queue
 based on the current and given track number. If there were no 
 requests in the queue before and the disk is not currently in use,
 then the disks begins a new write request by seeking to the starting
-block (the rest of the write and seek requests are handled by the daemon)
+block (the rest of the write and seek requests are handled by the 
+daemon).
 
 Parameters:
     arg1 - buffer pointer
@@ -341,7 +354,9 @@ Parameters:
     arg4 - starting block number
     arg5 - which disk to access
 
-Returns: does not return
+Outputs:
+    arg1 - 0 if the transfer was successful; disk status register otherwise
+    arg4 - -1 if illegal values were given as input; 0 otherwise
 */
 void diskWriteKern(USLOSS_Sysargs* arg) {
     void* buffer = arg->arg1;
@@ -399,12 +414,16 @@ void diskWriteKern(USLOSS_Sysargs* arg) {
 
 /*
 Syscall process for determining the size of a given disk. It sends
-a USLOSS_DISK_TRACKS request to get the number of tracks on the disk
+a USLOSS_DISK_TRACKS request to get the number of tracks on the disk.
 
 Parameters:
     arg1 - the disk unit to use
 
-Returns: does not return
+Returns:
+    arg1 - size of a block in bytes
+    arg2 - number of blocks in track
+    arg3 - number of tracks in the disk
+    arg4- -1 if illegal values were given as input; 0 otherwise
 */
 void diskSizeKern(USLOSS_Sysargs* arg) {
     int unit = (int)(long)arg->arg1;
@@ -427,7 +446,8 @@ void diskSizeKern(USLOSS_Sysargs* arg) {
 }
 
 /*
-Daemon process that is forked for each disk device.
+Daemon process that is forked for each disk device. Handles the disk
+requests send to the disk in the elevator algorithm queues.
 
 Parameters:
     arg - the unitNo of the disk device
@@ -465,7 +485,7 @@ int diskDaemon(char* arg) {
             int numBlocks = currUserReq->blocks;
             int currTrack = currUserReq->startTrack;
 
-            //seeks to correct track if they don't match
+            // Seeks to correct track if they don't match
             if (currTrack != disks[unit].currTrack) {
                 USLOSS_DeviceRequest req;
                 req.opr = USLOSS_DISK_SEEK;
@@ -478,7 +498,7 @@ int diskDaemon(char* arg) {
                 disks[unit].currTrack = currTrack;
             }
             
-            //loop for reading or writing the given number of blocks
+            // Loop for reading or writing the given number of blocks
             int count = 0;
             while (count < numBlocks) {
                 if (DEBUG_MODE == 1) {
