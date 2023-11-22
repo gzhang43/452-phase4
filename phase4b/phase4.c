@@ -255,6 +255,18 @@ int sleepDaemon(char* arg) {
     }
 }
 
+/*
+Syscall process
+
+Parameters:
+    arg1 - buffer pointer
+    arg2 - number of blocks to read
+    arg3 - starting track number
+    arg4 - starting block number
+    arg5 - which disk to access
+
+Returns: does not return
+*/
 void diskReadKern(USLOSS_Sysargs* arg) {
     void* buffer = arg->arg1;
     int blocks = (int)(long)arg->arg2;
@@ -309,6 +321,18 @@ void diskReadKern(USLOSS_Sysargs* arg) {
     }
 }
 
+/*
+Syscall process that queues and begins a disk write process.
+
+Parameters:
+    arg1 - buffer pointer
+    arg2 - number of blocks to read
+    arg3 - starting track number
+    arg4 - starting block number
+    arg5 - which disk to access
+
+Returns: does not return
+*/
 void diskWriteKern(USLOSS_Sysargs* arg) {
     void* buffer = arg->arg1;
     int blocks = (int)(long)arg->arg2;
@@ -363,6 +387,15 @@ void diskWriteKern(USLOSS_Sysargs* arg) {
     }
 }
 
+/*
+Syscall process for determining the size of a given disk. It sends
+a USLOSS_DISK_TRACKS request to get the number of tracks on the disk
+
+Parameters:
+    arg1 - the disk unit to use
+
+Returns: does not return
+*/
 void diskSizeKern(USLOSS_Sysargs* arg) {
     int unit = (int)(long)arg->arg1;
 
